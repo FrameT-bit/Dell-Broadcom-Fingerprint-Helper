@@ -1,3 +1,5 @@
+Check https://github.com/FrameT-bit/Dell-Broadcom-Fingerprint-Helper-GUI for GUI tool
+
 # Dell Broadcom Fingerprint Helper
 
 Sandboxed fingerprint support for Dell Latitude 5420 on Ubuntu.

@@ -166,6 +166,11 @@ The port keeps the same private stack and adds the glue Fedora needs:
   module count.
 - Fedora's `authselect` profile already enables `with-fingerprint`, so PAM needs
   no change; the installer only warns when it is missing.
+- The firmware references are bind-mounted over `/var/lib/fprint/fw`, and the
+  installer creates that mount point first: `ProtectSystem=strict` leaves `/var`
+  read-only inside the unit namespace, so systemd cannot create the target of a
+  bind mount itself and the daemon would abort with `status=226/NAMESPACE`.
+  Uninstall removes the directory again when nothing else lives there.
 
 `FPRINT_FW_REF` selects the firmware reference release (`5.15` default, `5.12`
 alternative) on both families. The reference package is pinned per release and

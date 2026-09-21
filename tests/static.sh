@@ -13,6 +13,7 @@ scripts=(
     "$ROOT_DIR/lib/common.sh"
     "$ROOT_DIR/tests/download-smoke.sh"
     "$ROOT_DIR/tests/distro-portability.sh"
+    "$ROOT_DIR/tests/unit-mounts.sh"
 )
 
 for script in "${scripts[@]}"; do
@@ -24,5 +25,7 @@ if command -v shellcheck >/dev/null 2>&1; then
 else
     printf 'shellcheck is not installed; bash -n validation completed.\n'
 fi
+
+"$ROOT_DIR/tests/unit-mounts.sh"
 
 printf 'Static tests completed.\n'

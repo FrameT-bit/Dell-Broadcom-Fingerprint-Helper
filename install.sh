@@ -212,17 +212,26 @@ new_root=""
 # the firmware references are bind-mounted below it by the unit override.
 install -d -m 0700 /var/lib/fprint
 
+# ProtectSystem=strict makes /var read-only inside the unit's namespace, so
+# systemd cannot create the bind mount point itself: without this directory the
+# daemon aborts with status=226/NAMESPACE ("Failed to set up mount
+# namespacing: /var/lib/fprint/fw: No such file or directory").
+install -d -m 0755 "$FW_MOUNT_POINT"
+
 install -d -m 0755 "$DROPIN_DIR"
 install -m 0644 "$SCRIPT_DIR/systemd/override.conf" "$DROPIN_PATH"
 systemctl daemon-reload
 
 if ! systemctl restart fprintd.service || ! systemctl is-active --quiet fprintd.service; then
     warn "the compatibility daemon did not start; rolling back"
+    systemctl status fprintd.service --no-pager -n 12 || true
+    journalctl -u fprintd.service -n 12 --no-pager || true
     rm -f -- "$DROPIN_PATH"
     rm -rf -- "$INSTALL_ROOT"
     if [[ -n $backup_root && -d $backup_root ]]; then
         mv -- "$backup_root" "$INSTALL_ROOT"
     fi
+    rmdir --ignore-fail-on-non-empty "$FW_MOUNT_POINT" 2>/dev/null || true
     systemctl daemon-reload
     systemctl restart fprintd.service || true
     die "installation rolled back; run ./diagnose.sh for diagnostics"

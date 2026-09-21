@@ -21,6 +21,10 @@ fi
 systemctl daemon-reload
 systemctl restart fprintd.service || warn "the distribution fprintd service could not be restarted"
 
+# The override bind-mounted the firmware references over this directory; drop the
+# now unused mount point when nothing else lives there.
+rmdir --ignore-fail-on-non-empty "$FW_MOUNT_POINT" 2>/dev/null || true
+
 if $removed; then
     log "Helper removed; the distribution fprintd service was restored"
 else

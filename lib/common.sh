@@ -18,6 +18,10 @@ INSTALL_ROOT="/opt/${PROJECT_NAME}"
 DROPIN_DIR="/etc/systemd/system/fprintd.service.d"
 DROPIN_PATH="${DROPIN_DIR}/90-${PROJECT_NAME}.conf"
 FW_REF_DIR="${INSTALL_ROOT}/share/fw"
+# Where the unit override bind-mounts FW_REF_DIR. The directory has to exist on
+# the host before the unit starts: ProtectSystem=strict leaves /var read-only in
+# the unit's namespace, so systemd cannot create the mount point itself.
+FW_MOUNT_POINT="/var/lib/fprint/fw"
 
 FPRINTD_FILE="fprintd_1.90.9-1~ubuntu20.04.1_amd64.deb"
 FPRINTD_URL="https://archive.ubuntu.com/ubuntu/pool/main/f/fprintd/${FPRINTD_FILE}"

@@ -10,10 +10,17 @@ Mitigations included in the project:
 - legacy libraries remain private and do not replace distribution packages;
 - Bubblewrap tests use temporary filesystem and D-Bus state;
 - sandbox network access is disabled after downloads finish;
-- firmware reference files from the current Ubuntu package are mounted
-  read-only, preventing host-file changes;
+- firmware reference files are mounted read-only from the private stack,
+  preventing host-file changes on Debian/Ubuntu and Fedora alike;
 - a permanent installation is rolled back if its daemon does not start;
 - uninstalling restores the distribution daemon.
+
+Fedora ships `fprintd.service` with `MemoryDenyWriteExecute=true` and a
+`SystemCallFilter` allowlist. The unit override resets both for the
+compatibility daemon only, because the proprietary plugin is validated against
+the unhardened daemon Ubuntu ships; the USB device allowlist and the private
+state directory are kept. This is a deliberate reduction of hardening to match
+the reference environment, not an oversight.
 
 The Dell/Canonical archive serves the Broadcom package over HTTP. The pinned
 checksum is therefore mandatory protection against modification in transit.

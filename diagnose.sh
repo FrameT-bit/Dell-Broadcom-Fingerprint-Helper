@@ -25,10 +25,34 @@ else
 fi
 
 section "Distribution packages"
-for package_name in fprintd libfprint-2-2 libfprint-2-tod1 libpam-fprintd; do
-    version=$(dpkg-query -W -f='${Version}' "$package_name" 2>/dev/null || true)
-    printf '%-20s %s\n' "$package_name" "${version:-not installed}"
-done
+case "$(host_distro_family)" in
+    debian) package_names=(fprintd libfprint-2-2 libfprint-2-tod1 libpam-fprintd) ;;
+    fedora) package_names=(fprintd libfprint pcsc-lite) ;;
+    *) package_names=() ;;
+esac
+if ((${#package_names[@]})); then
+    for package_name in "${package_names[@]}"; do
+        version=$(host_package_version "$package_name")
+        printf '%-20s %s\n' "$package_name" "${version:-not installed}"
+    done
+else
+    printf 'Unrecognised distribution family; package inventory skipped\n'
+fi
+
+section "Fingerprint PAM stack"
+if pam_fingerprint_enabled; then
+    printf 'pam_fprintd is referenced by the authentication stack\n'
+else
+    printf 'pam_fprintd is not referenced by the authentication stack\n'
+    printf 'Enable it with: %s\n' "$(pam_fingerprint_hint)"
+fi
+
+if command -v getenforce >/dev/null 2>&1; then
+    section "SELinux"
+    printf 'Mode: %s\n' "$(getenforce)"
+    policy_modules=$(semodule -l 2>/dev/null | grep -c '^fprintd' || true)
+    printf 'fprintd policy modules: %s\n' "${policy_modules:-unavailable without root}"
+fi
 
 section "Helper"
 if [[ -r $INSTALL_ROOT/share/manifest.txt ]]; then
@@ -40,6 +64,15 @@ else
     printf 'Not installed in %s\n' "$INSTALL_ROOT"
 fi
 
+section "Firmware references"
+if [[ -r $FW_REF_DIR/bcm_cv_current_version.txt ]]; then
+    awk -F': ' '/^version:|^SBI_VERSION:/{printf "%-14s %s\n", $1, $2}' \
+        "$FW_REF_DIR/bcm_cv_current_version.txt"
+    printf 'Reference files: %s\n' "$(find "$FW_REF_DIR" -maxdepth 1 -type f | wc -l)"
+else
+    printf 'Not present in %s\n' "$FW_REF_DIR"
+fi
+
 section "fprintd service"
 systemctl show fprintd.service \
     --property=LoadState,ActiveState,SubState,ExecStart,Environment --no-pager 2>/dev/null || true
@@ -49,6 +82,14 @@ if [[ -d $DROPIN_DIR ]]; then
 else
     printf 'none\n'
 fi
+printf '\nFirmware references mounted by overrides:\n'
+if [[ -d $DROPIN_DIR ]]; then
+    grep -H '^[[:space:]]*BindReadOnlyPaths=' "$DROPIN_DIR"/*.conf 2>/dev/null || printf 'none\n'
+else
+    printf 'none\n'
+fi
+printf '\nHost /var/lib/fprint/fw: %s\n' \
+    "$([[ -e /var/lib/fprint/fw ]] && printf 'present' || printf 'absent (the unit override bind-mounts it from the stack)')"
 
 section "Current account fingerprints"
 if command -v fprintd-list >/dev/null 2>&1; then

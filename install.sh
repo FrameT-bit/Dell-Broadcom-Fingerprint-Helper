@@ -20,6 +20,12 @@ Usage: sudo ./install.sh [--force]
   --dry-run         download and validate without changing the system
   --stage DIRECTORY build the private stack in DIRECTORY without installing it
   --force           skip the USB model and distribution checks
+
+Environment:
+  FPRINT_FW_REF     firmware reference release: 5.15 (default) or 5.12
+
+Supported hosts: Debian/Ubuntu derivatives and Fedora-family distributions,
+both on amd64. See README.md for the portability notes.
 EOF
 }
 
@@ -48,22 +54,23 @@ if $dry_run && [[ -n $stage_dir ]]; then
     die "--dry-run and --stage cannot be used together"
 fi
 
-for command_name in awk cp curl dpkg dpkg-deb dpkg-query find grep install ldd lsusb sha256sum systemctl; do
+for command_name in ar awk cp curl find grep install ldd lsusb sha256sum systemctl tar; do
     require_command "$command_name"
 done
 
-[[ $(dpkg --print-architecture) == amd64 ]] || die "only the amd64 architecture is supported"
+[[ $(host_arch) == amd64 ]] || die "only the amd64 architecture is supported"
 
-if [[ -r /etc/os-release ]]; then
-    # shellcheck source=/dev/null
-    source /etc/os-release
-else
-    die "could not identify the distribution"
-fi
+case "$(host_distro_family)" in
+    debian|fedora) ;;
+    *)
+        if ! $force; then
+            die "supported hosts are Debian/Ubuntu derivatives and Fedora-family distributions; use --force at your own risk"
+        fi
+        warn "unrecognised distribution; continuing because --force was given"
+        ;;
+esac
 
 if ! $force; then
-    [[ ${ID:-} == ubuntu || ${ID_LIKE:-} == *ubuntu* ]] || \
-        die "this release supports Ubuntu derivatives only; use --force at your own risk"
     is_supported_device_present || \
         die "USB reader $SUPPORTED_USB_ID was not found; use --force only for known-compatible hardware"
 fi
@@ -72,18 +79,7 @@ if ! $dry_run && [[ -z $stage_dir && $EUID -ne 0 ]]; then
     die "installation must run as root (use sudo)"
 fi
 
-if ! $dry_run && [[ -z $stage_dir ]]; then
-    firmware_package_version=$(dpkg-query -W -f='${Version}' \
-        libfprint-2-tod1-broadcom 2>/dev/null || true)
-    [[ -n $firmware_package_version ]] || \
-        die "the current Ubuntu Broadcom package is required"
-    [[ $firmware_package_version != 5.8.012.0-* ]] || \
-        die "the installed Broadcom firmware package is legacy and is not safe for this workflow"
-    [[ -r /var/lib/fprint/fw/bcm_cv_current_version.txt ]] || \
-        die "current Ubuntu Broadcom firmware references are missing; install the distribution Broadcom package first"
-fi
-
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/${PROJECT_NAME}.XXXXXX")
+work_dir=$(mktemp -d "$(tmp_base_dir)/${PROJECT_NAME}.XXXXXX")
 packages_dir="$work_dir/packages"
 extract_dir="$work_dir/extracted"
 mkdir -p "$packages_dir" "$extract_dir"
@@ -94,22 +90,42 @@ download_verified "$TOD_URL" "$packages_dir/$TOD_FILE" "$TOD_SHA256"
 download_verified "$OPENSSL_URL" "$packages_dir/$OPENSSL_FILE" "$OPENSSL_SHA256"
 download_verified "$BROADCOM_URL" "$packages_dir/$BROADCOM_FILE" "$BROADCOM_SHA256"
 
+fw_ref_filename=$(fw_ref_file)
+download_verified "$(fw_ref_url)" "$packages_dir/$fw_ref_filename" "$(fw_ref_sha256)"
+
 for package_file in "$packages_dir"/*.deb; do
     package_name=$(basename "$package_file" .deb)
-    dpkg-deb -x "$package_file" "$extract_dir/$package_name"
+    deb_extract "$package_file" "$extract_dir/$package_name"
 done
+
+# The plugin and the firmware references live in separate packages, and both
+# packages ship a var/lib/fprint/fw tree and a plugin, so every lookup below is
+# scoped to the package it must come from instead of scanning the whole
+# extraction root.
+broadcom_package_dir="$extract_dir/$(basename -- "$BROADCOM_FILE" .deb)"
+fw_ref_package_dir="$extract_dir/$(basename -- "$fw_ref_filename" .deb)"
 
 fprintd_binary=$(find "$extract_dir" -type f -path '*/usr/libexec/fprintd' -print -quit)
 libfprint_library=$(find "$extract_dir" -type f -path '*/usr/lib/x86_64-linux-gnu/libfprint-2.so.2.*' -print -quit)
 tod_library=$(find "$extract_dir" -type f -path '*/usr/lib/x86_64-linux-gnu/libfprint-2-tod.so.1*' -print -quit)
 ssl_library=$(find "$extract_dir" -type f -path '*/usr/lib/x86_64-linux-gnu/libssl.so.1.1' -print -quit)
 crypto_library=$(find "$extract_dir" -type f -path '*/usr/lib/x86_64-linux-gnu/libcrypto.so.1.1' -print -quit)
-broadcom_plugin=$(find "$extract_dir" -type f -name 'libfprint-2-tod-1-broadcom.so' -print -quit)
+broadcom_plugin=$(find "$broadcom_package_dir" -type f -name 'libfprint-2-tod-1-broadcom.so' -print -quit)
+fw_ref_source=$(find "$fw_ref_package_dir" -type d -path '*/var/lib/fprint/fw' -print -quit)
 
 [[ -n $fprintd_binary && -n $libfprint_library && -n $tod_library ]] || \
     die "core components were not found in the packages"
 [[ -n $ssl_library && -n $crypto_library && -n $broadcom_plugin ]] || \
     die "OpenSSL 1.1 or the Broadcom plugin was not found in the packages"
+[[ -n $fw_ref_source ]] || die "the firmware reference package did not contain var/lib/fprint/fw"
+[[ -r $fw_ref_source/bcm_cv_current_version.txt ]] || \
+    die "the firmware reference package did not contain bcm_cv_current_version.txt"
+
+fw_version=$(awk -F': ' '/^version:/{print $2; exit}' "$fw_ref_source/bcm_cv_current_version.txt")
+[[ -n $fw_version ]] || die "the firmware reference package has no version field"
+[[ $fw_version == "$FPRINT_FW_REF".* ]] || die \
+    "reference package $fw_ref_filename declares $fw_version, which is not the selected FPRINT_FW_REF=$FPRINT_FW_REF"
+log "Firmware references: $fw_version (from $fw_ref_filename)"
 
 if [[ -n $stage_dir ]]; then
     [[ ! -e $stage_dir ]] || die "staging destination already exists: $stage_dir"
@@ -122,7 +138,7 @@ else
 fi
 
 install -d -m 0755 "$new_root/bin" "$new_root/lib/libfprint-2/tod-1" \
-    "$new_root/share"
+    "$new_root/share/fw"
 install -m 0755 "$fprintd_binary" "$new_root/bin/fprintd"
 
 for package_tree in "$extract_dir"/*; do
@@ -134,13 +150,19 @@ done
 install -m 0644 "$broadcom_plugin" \
     "$new_root/lib/libfprint-2/tod-1/libfprint-2-tod-1-broadcom.so"
 
+cp -a "$fw_ref_source/." "$new_root/share/fw/"
+chmod 0644 "$new_root"/share/fw/*
+
 cat > "$new_root/share/manifest.txt" <<EOF
 $PROJECT_NAME $PROJECT_VERSION
+host: $(host_distro_id) ($(host_distro_family)) $(uname -m)
+firmware references: $fw_version
 $FPRINTD_SHA256  $FPRINTD_FILE
 $LIBFPRINT_SHA256  $LIBFPRINT_FILE
 $TOD_SHA256  $TOD_FILE
 $OPENSSL_SHA256  $OPENSSL_FILE
 $BROADCOM_SHA256  $BROADCOM_FILE
+$(fw_ref_sha256)  $fw_ref_filename
 EOF
 
 ldd_output=$(LD_LIBRARY_PATH="$new_root/lib" ldd "$new_root/bin/fprintd" 2>&1 || true)
@@ -186,6 +208,10 @@ fi
 mv -- "$new_root" "$INSTALL_ROOT"
 new_root=""
 
+# The daemon stores enrolled prints here (systemd StateDirectory on Fedora) and
+# the firmware references are bind-mounted below it by the unit override.
+install -d -m 0700 /var/lib/fprint
+
 install -d -m 0755 "$DROPIN_DIR"
 install -m 0644 "$SCRIPT_DIR/systemd/override.conf" "$DROPIN_PATH"
 systemctl daemon-reload
@@ -204,10 +230,18 @@ fi
 
 [[ -z $backup_root || ! -d $backup_root ]] || rm -rf -- "$backup_root"
 
-if ! grep -qE '^[[:space:]]*auth.*pam_fprintd\.so' /etc/pam.d/common-auth 2>/dev/null; then
-    warn "PAM fingerprint authentication is not enabled. Run: sudo pam-auth-update"
-    warn "Select 'Fingerprint authentication'."
+if ! pam_fingerprint_enabled; then
+    warn "PAM fingerprint authentication is not enabled. Run: $(pam_fingerprint_hint)"
 fi
+
+case "$(host_distro_family)" in
+    fedora)
+        if command -v getenforce >/dev/null 2>&1 && [[ $(getenforce) == Enforcing ]]; then
+            log "SELinux is enforcing; the distribution has no fprintd policy module,"
+            log "so the compatibility daemon runs unconfined. ./diagnose.sh reports the state."
+        fi
+        ;;
+esac
 
 log "Installation complete. Enroll with: fprintd-enroll -f right-index-finger"
 log "Then validate with: fprintd-verify"

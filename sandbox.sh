@@ -29,14 +29,14 @@ case $action in
     *) usage >&2; die "unknown sandbox action: $action" ;;
 esac
 
-for command_name in bwrap dpkg-query lsusb; do
+for command_name in ar bwrap lsusb tar; do
     require_command "$command_name"
 done
 
 is_supported_device_present || die "USB fingerprint reader $SUPPORTED_USB_ID was not found"
 [[ -d /dev/bus/usb ]] || die "/dev/bus/usb is not available"
 
-sandbox_dir=$(mktemp -d "${TMPDIR:-/tmp}/${PROJECT_NAME}-sandbox.XXXXXX")
+sandbox_dir=$(mktemp -d "$(tmp_base_dir)/${PROJECT_NAME}-sandbox.XXXXXX")
 stack_dir="$sandbox_dir/stack"
 log "Building a verified, temporary compatibility stack"
 "$SCRIPT_DIR/install.sh" --stage "$stack_dir"
@@ -72,19 +72,22 @@ for command_name in dbus-daemon fprintd-enroll fprintd-list fprintd-verify gdbus
     require_command "$command_name"
 done
 
-firmware_package_version=$(dpkg-query -W -f='${Version}' \
-    libfprint-2-tod1-broadcom 2>/dev/null || true)
-[[ -n $firmware_package_version ]] || \
-    die "hardware tests require the current Ubuntu Broadcom package"
-[[ $firmware_package_version != 5.8.012.0-* ]] || \
-    die "hardware tests refuse the legacy Broadcom firmware package"
+fw_ref_version=$(awk -F': ' '/^version:/{print $2; exit}' \
+    "$stack_dir/share/fw/bcm_cv_current_version.txt" 2>/dev/null || true)
+[[ -n $fw_ref_version ]] || die "the staged stack carries no firmware references"
+[[ $fw_ref_version == "$FPRINT_FW_REF".* ]] || die \
+    "the staged stack carries $fw_ref_version, which is not the selected FPRINT_FW_REF=$FPRINT_FW_REF"
 
 printf '%s\n' \
     'WARNING: the proprietary plugin can update the physical sensor firmware' \
-    'when its version differs from the Ubuntu firmware reference package.' \
+    "when the sensor version differs from the reference release $fw_ref_version" \
+    '(select another reference with FPRINT_FW_REF=5.12).' \
     'Bubblewrap isolates host files and packages, but it cannot undo USB writes.'
 read -r -p 'Type YES to allow hardware access: ' confirmation
 [[ $confirmation == YES ]] || die "hardware test cancelled"
+
+raw_udev_args=()
+[[ -d /run/udev ]] && raw_udev_args=(--ro-bind /run/udev /run/udev)
 
 log "Starting the isolated test environment"
 sudo -- bwrap \
@@ -107,10 +110,11 @@ sudo -- bwrap \
     --dev-bind /dev/bus/usb /dev/bus/usb \
     --tmpfs /tmp \
     --dir /run \
+    "${raw_udev_args[@]}" \
     --dir /var \
     --dir /var/lib \
     --tmpfs /var/lib/fprint \
-    --ro-bind /var/lib/fprint/fw /var/lib/fprint/fw \
+    --ro-bind "$stack_dir/share/fw" /var/lib/fprint/fw \
     --ro-bind "$stack_dir" /opt/fingerprint-stack \
     --ro-bind "$SCRIPT_DIR" /project \
     --setenv HOME /tmp/home \

@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
+# Shared definitions and helpers.
+#
+# Portability notes
+# -----------------
+# * Debian/Ubuntu derivatives and Fedora-family hosts are both supported.
+# * No distribution package is required for the firmware references any more:
+#   they are always taken from a pinned Dell/Canonical reference package, so the
+#   stack behaves identically on both families (see fw_ref_* below).
+# * Every .deb is unpacked with `ar` + `tar`, never with dpkg, because Fedora
+#   does not ship the dpkg toolset.
 
 PROJECT_NAME="dell-broadcom-fingerprint-helper"
-PROJECT_VERSION="0.1.0"
+PROJECT_VERSION="0.2.0"
 SUPPORTED_USB_ID="0a5c:5843"
 
 INSTALL_ROOT="/opt/${PROJECT_NAME}"
 DROPIN_DIR="/etc/systemd/system/fprintd.service.d"
 DROPIN_PATH="${DROPIN_DIR}/90-${PROJECT_NAME}.conf"
+FW_REF_DIR="${INSTALL_ROOT}/share/fw"
 
 FPRINTD_FILE="fprintd_1.90.9-1~ubuntu20.04.1_amd64.deb"
 FPRINTD_URL="https://archive.ubuntu.com/ubuntu/pool/main/f/fprintd/${FPRINTD_FILE}"
@@ -28,6 +39,41 @@ BROADCOM_FILE="libfprint-2-tod1-broadcom_5.8.012.0-0ubuntu1~oem2_amd64.deb"
 BROADCOM_URL="http://dell.archive.canonical.com/updates/pool/public/libf/libfprint-2-tod1-broadcom/${BROADCOM_FILE}"
 BROADCOM_SHA256="4c8e7f4127fb60650128208885c91448629f9ca1fedcd4f59f7a33d6e73aef06"
 
+# Firmware reference packages. Only their /var/lib/fprint/fw trees are used:
+# they are never installed and never taken from the host. The legacy 5.8.012.0
+# release is not offered at all; install.sh verifies that the package really
+# declares the selected release.
+BROADCOM_REF_BASE_URL="http://dell.archive.canonical.com/updates/pool/public/libf/libfprint-2-tod1-broadcom"
+BROADCOM_REF_5_15_FILE="libfprint-2-tod1-broadcom_5.15.285-5.15.010.0-0ubuntu2~22.04.1~oem1_amd64.deb"
+BROADCOM_REF_5_15_SHA256="98fa8afab8b97457329a74960f6a6404f32a1782bcdcaed96030ffa15badb962"
+BROADCOM_REF_5_12_FILE="libfprint-2-tod1-broadcom_5.12.018-0ubuntu1~22.04.01_amd64.deb"
+BROADCOM_REF_5_12_SHA256="c2b0822ce0a0b7b916c77259445b7fa06ea200f1204b5c62d01d3203db8b7e6a"
+
+# FPRINT_FW_REF selects which reference release is fed to the plugin: 5.15
+# (default, newest published) or 5.12. The sensor firmware is only rewritten
+# when the reference version differs from the version already on the sensor.
+FPRINT_FW_REF="${FPRINT_FW_REF:-5.15}"
+
+fw_ref_file() {
+    case "$FPRINT_FW_REF" in
+        5.15) printf '%s' "$BROADCOM_REF_5_15_FILE" ;;
+        5.12) printf '%s' "$BROADCOM_REF_5_12_FILE" ;;
+        *) die "unsupported FPRINT_FW_REF: $FPRINT_FW_REF (expected 5.15 or 5.12)" ;;
+    esac
+}
+
+fw_ref_sha256() {
+    case "$FPRINT_FW_REF" in
+        5.15) printf '%s' "$BROADCOM_REF_5_15_SHA256" ;;
+        5.12) printf '%s' "$BROADCOM_REF_5_12_SHA256" ;;
+        *) die "unsupported FPRINT_FW_REF: $FPRINT_FW_REF (expected 5.15 or 5.12)" ;;
+    esac
+}
+
+fw_ref_url() {
+    printf '%s/%s' "$BROADCOM_REF_BASE_URL" "$(fw_ref_file)"
+}
+
 log() {
     printf '[%s] %s\n' "$PROJECT_NAME" "$*"
 }
@@ -41,8 +87,101 @@ die() {
     exit 1
 }
 
+# TMPDIR is inherited from the caller and can point at a path this process
+# cannot write to (a private mount, an unmounted tmpfs, a service environment).
+# Fall back to /tmp so mktemp never fails on a stale TMPDIR.
+tmp_base_dir() {
+    local candidate=${TMPDIR:-/tmp}
+    [[ -d $candidate && -w $candidate ]] || candidate=/tmp
+    printf '%s\n' "$candidate"
+}
+
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+# Distribution family: debian, fedora, or unknown.
+host_distro_id() {
+    local id=""
+    if [[ -r /etc/os-release ]]; then
+        id=$(awk -F= '/^ID=/{gsub(/"/, "", $2); print $2; exit}' /etc/os-release)
+    fi
+    printf '%s' "$id"
+}
+
+host_distro_like() {
+    local like=""
+    if [[ -r /etc/os-release ]]; then
+        like=$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print $2; exit}' /etc/os-release)
+    fi
+    printf '%s' "$like"
+}
+
+host_distro_family() {
+    local id like
+    id=$(host_distro_id)
+    like=$(host_distro_like)
+    case "$id $like" in
+        *ubuntu*|*debian*) printf 'debian' ;;
+        *fedora*|*rhel*|*centos*) printf 'fedora' ;;
+        *) printf 'unknown' ;;
+    esac
+}
+
+host_arch() {
+    case "$(uname -m)" in
+        x86_64) printf 'amd64' ;;
+        aarch64) printf 'arm64' ;;
+        *) uname -m ;;
+    esac
+}
+
+# Unpack a .deb without dpkg: control/data members are plain ar archives.
+deb_extract() {
+    local deb=$1
+    local dest=$2
+    local member=""
+
+    mkdir -p -- "$dest"
+    ( cd -- "$dest" && ar x -- "$deb" ) >/dev/null 2>&1 || \
+        die "could not unpack $(basename "$deb") with ar"
+    member=$(find "$dest" -maxdepth 1 -name 'data.tar.*' -print -quit)
+    [[ -n $member ]] || die "no data.tar member inside $(basename "$deb")"
+    tar -xf "$member" -C "$dest" || die "could not extract $(basename "$member")"
+    rm -f -- "$dest"/data.tar.* "$dest"/control.tar.* "$dest"/debian-binary
+}
+
+# Version of an installed distribution package, empty when absent.
+host_package_version() {
+    local name=$1
+    case "$(host_distro_family)" in
+        debian) dpkg-query -W -f='${Version}' "$name" 2>/dev/null || true ;;
+        fedora) rpm -q --qf '%{VERSION}-%{RELEASE}' "$name" 2>/dev/null || true ;;
+        *) : ;;
+    esac
+}
+
+pam_fingerprint_enabled() {
+    case "$(host_distro_family)" in
+        debian)
+            grep -qE '^[[:space:]]*auth.*pam_fprintd\.so' /etc/pam.d/common-auth 2>/dev/null
+            ;;
+        fedora)
+            grep -qE '^[[:space:]]*auth.*pam_fprintd\.so' \
+                /etc/pam.d/system-auth /etc/pam.d/fingerprint-auth \
+                /etc/authselect/system-auth 2>/dev/null || \
+                authselect current 2>/dev/null | grep -q 'with-fingerprint'
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+pam_fingerprint_hint() {
+    case "$(host_distro_family)" in
+        debian) printf '%s' 'sudo pam-auth-update  (enable "Fingerprint authentication")' ;;
+        fedora) printf '%s' 'sudo authselect enable-feature with-fingerprint && sudo authselect apply-changes' ;;
+        *) printf '%s' 'enable pam_fprintd.so in the PAM stack of your distribution' ;;
+    esac
 }
 
 download_verified() {

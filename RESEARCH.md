@@ -33,6 +33,38 @@ The result was reproduced on amd64 Ubuntu with the target Latitude 5420 reader.
 No user, host, serial number, service tag, or network information is retained in
 this project.
 
+## Portability to Fedora-family hosts
+
+The stack itself is distribution independent: it is a private directory holding
+`fprintd` 1.90.9, `libfprint`/TOD 1.90.2, OpenSSL 1.1, and the Broadcom plugin,
+pointed at each other with `LD_LIBRARY_PATH` and `FP_TOD_DRIVERS_DIR`. Verified
+on Fedora 44 with the stack extracted from the pinned `.deb` files:
+
+| Check | Result |
+|---|---|
+| Extraction with `ar` + `tar` (no dpkg) | worked |
+| `ldd` of `bin/fprintd` with `LD_LIBRARY_PATH` | every dependency resolved |
+| `ldd` of the Broadcom plugin | every dependency resolved |
+| `fprintd` 1.90.9 executed inside Bubblewrap | 0.2.0 stack check passed |
+| Firmware reference files from the reference package | mounted read-only at `/var/lib/fprint/fw` |
+
+Fedora-specific differences handled by the port:
+
+- package inventory uses `rpm` instead of `dpkg-query`;
+- the hardened Fedora unit (`MemoryDenyWriteExecute=true`, `SystemCallFilter`
+  allowlist) is relaxed for the compatibility daemon, matching the unhardened
+  Ubuntu unit the plugin was validated against;
+- `StateDirectory=fprint` and the USB device allowlist of the Fedora unit are
+  preserved, so prints are stored in `/var/lib/fprint` as usual;
+- no udev rule is installed: `strings` shows that the legacy `libfprint` never
+  reads `LIBFPRINT_DRIVER`, so driver selection is by USB ID only;
+- SELinux has no `fprintd` policy module on Fedora, which leaves the
+  compatibility daemon unconfined instead of blocked.
+
+Enrollment and PAM authentication on Fedora are expected to behave exactly as on
+Ubuntu because both use the same binaries; the hardware confirmation must still
+be repeated per machine.
+
 ## Isolation model
 
 Installing legacy libraries as system packages could downgrade dependencies

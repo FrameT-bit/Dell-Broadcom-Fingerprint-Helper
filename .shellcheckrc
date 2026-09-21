@@ -1,0 +1,4 @@
+# lib/common.sh is sourced by the other scripts, so the variables it defines and
+# the helper functions it exports look unused when it is checked on its own
+# (SC2034). /etc/os-release is read at runtime and cannot be followed (SC1091).
+disable=SC2034,SC1091

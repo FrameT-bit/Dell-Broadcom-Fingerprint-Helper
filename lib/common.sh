@@ -211,6 +211,17 @@ download_verified() {
     local expected=$3
     local actual
 
+    # The same package is legitimately requested twice when the firmware reference
+    # is the plugin's own package, so a file already on disk with the right digest
+    # is reused instead of downloaded again.
+    if [[ -f $output ]]; then
+        actual=$(sha256sum "$output" | awk '{print $1}')
+        if [[ $actual == "$expected" ]]; then
+            log "Reusing $(basename "$output") (SHA-256 already verified)"
+            return 0
+        fi
+    fi
+
     log "Downloading $(basename "$output")"
     curl --fail --location --retry 3 --connect-timeout 20 --http1.1 \
         --show-error --output "$output" "$url"

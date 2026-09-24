@@ -22,7 +22,8 @@ Latitude 5420 workflow on Debian/Ubuntu derivatives and Fedora-family hosts.
 ## Supported scope
 
 - Dell Latitude 5420
-- Broadcom USB device `0a5c:5843`
+- Broadcom ControlVault USB readers `0a5c:5841`, `0a5c:5842`, `0a5c:5843`, `0a5c:5844`
+  and `0a5c:5845` (the PID varies per part and OEM SKU; the 5420 reports `0a5c:5841`)
 - Ubuntu and Ubuntu-based distributions on amd64
 - Fedora-family distributions on amd64
 - Fingerprint enrollment, verification, and PAM authentication
@@ -171,11 +172,33 @@ The port keeps the same private stack and adds the glue Fedora needs:
   read-only inside the unit namespace, so systemd cannot create the target of a
   bind mount itself and the daemon would abort with `status=226/NAMESPACE`.
   Uninstall removes the directory again when nothing else lives there.
+- The first start after installation reprograms the ControlVault firmware whenever
+  the mounted reference pack declares a different release than the device carries
+  (observed on a 5420: `Updating ControlVault firmware from ??? to 5.8.12.0`,
+  **93 s**, SBI `229` -> `122`). Firmware programming must never be interrupted, so
+  the unit override sets `TimeoutStartSec=600`: Fedora's stock `45 s` killed the
+  daemon in the middle of the flash, `systemctl restart` then failed and the
+  installer rolled back a working installation. Do not abort the installer while
+  that line is in `journalctl -u fprintd -f`.
 
-`FPRINT_FW_REF` selects the firmware reference release (`5.15` default, `5.12`
-alternative) on both families. The reference package is pinned per release and
-`install.sh` verifies that it really declares the selected release before
-staging it, so a mismatched package can never be mounted.
+`FPRINT_FW_REF` selects the firmware reference release: `5.8` (default, and the
+only one the bundled plugin can parse), `5.12` or `5.15`. The 5.12/5.15 packages are
+built for the 22.04 `libfprint` 1.94 stack and their plugin needs
+`fpi_device_report_finger_status_changes`, which `libfprint` 1.90 does not export,
+so those packs only become usable once the stack itself moves to 1.94. With the
+default the reference pack *is* the plugin's own package and is downloaded once.
+The reference package is pinned per release and `install.sh` verifies that it really
+declares the selected release before staging it, so a mismatched package can never
+be mounted.
+
+## Known failure signatures
+
+| Log line | Meaning |
+| --- | --- |
+| `Enrollment failed : Device status = (89)` | The plugin aborted the enrollment; the real cause is in the lines right above it |
+| `Data read incorrect from file` / `Cannot read contents of sensor-firmware file` | The mounted firmware pack is not the one the plugin was built for (`FPRINT_FW_REF`) |
+| `fprintd-list` says `No devices available` while the reader is present | The compatibility daemon is not the active `fprintd`; run `./diagnose.sh` |
+| `libusb couldn't open USB device ... errno=13` | Unprivileged session: the reader nodes are `root:root` with no user ACL |
 
 ## Diagnostics
 

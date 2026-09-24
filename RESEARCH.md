@@ -2,7 +2,9 @@
 
 ## Symptom
 
-On the Latitude 5420 reader with USB ID `0a5c:5843`, current `fprintd` and
+On the Latitude 5420 reader with USB ID `0a5c:5843` (the unit this was diagnosed on
+reports `0a5c:5841`; the ControlVault 58xx family spans `0a5c:5841`-`0a5c:5845`),
+current `fprintd` and
 `libfprint` versions detected the device and accepted roughly ten enrollment
 stages. Completion then returned `enroll-disconnected` or
 `enroll-unknown-error`, and no fingerprint was saved.

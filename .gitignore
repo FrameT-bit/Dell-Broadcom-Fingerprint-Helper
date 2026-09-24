@@ -1,0 +1,4 @@
+# Local debugging scaffolding: reproduces the failure on this machine only and
+# references paths outside the repository. Never commit it.
+sandbox/repro-*.sh
+*.log

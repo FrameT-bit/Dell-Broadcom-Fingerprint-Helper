@@ -1,7 +1,7 @@
 # Contributing
 
 This project accepts bug fixes only. New features, unrelated fingerprint
-readers, non-Ubuntu platforms, and general expansion are out of scope.
+readers, non-Ubuntu/Fedora platforms, and general expansion are out of scope.
 
 Before reporting a bug, run:
 

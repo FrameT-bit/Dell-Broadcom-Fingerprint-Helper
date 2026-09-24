@@ -12,7 +12,11 @@
 
 PROJECT_NAME="dell-broadcom-fingerprint-helper"
 PROJECT_VERSION="0.2.0"
-SUPPORTED_USB_ID="0a5c:5843"
+# Broadcom/Conexant ControlVault fingerprint readers. The whole "58xx" family is
+# driven by the same TOD plugin, and the PID depends on the exact part/OEM SKU
+# (Latitude 5420 reports 0a5c:5841 for its GF5288, other models report 0a5c:5843
+# or 0a5c:5845), so every known ID is accepted instead of a single one.
+SUPPORTED_USB_IDS=("0a5c:5841" "0a5c:5842" "0a5c:5843" "0a5c:5844" "0a5c:5845")
 
 INSTALL_ROOT="/opt/${PROJECT_NAME}"
 DROPIN_DIR="/etc/systemd/system/fprintd.service.d"
@@ -44,33 +48,46 @@ BROADCOM_URL="http://dell.archive.canonical.com/updates/pool/public/libf/libfpri
 BROADCOM_SHA256="4c8e7f4127fb60650128208885c91448629f9ca1fedcd4f59f7a33d6e73aef06"
 
 # Firmware reference packages. Only their /var/lib/fprint/fw trees are used:
-# they are never installed and never taken from the host. The legacy 5.8.012.0
-# release is not offered at all; install.sh verifies that the package really
-# declares the selected release.
+# they are never installed and never taken from the host. install.sh verifies
+# that the package really declares the selected release.
+#
+# The reference release MUST match the plugin build that is loaded: the firmware
+# pack is parsed with offsets/section counts baked into the plugin, so a 5.8
+# plugin reading a 5.15 pack fails with "Data read incorrect from file" ->
+# "Cannot read contents of sensor-firmware file" and enrollment never starts.
+# BROADCOM_FILE is the 5.8.012.0 build (the only one compatible with the pinned
+# Ubuntu 20.04/libfprint 1.90 stack), so 5.8 is the matching default and is
+# served from that very package instead of a second download.
 BROADCOM_REF_BASE_URL="http://dell.archive.canonical.com/updates/pool/public/libf/libfprint-2-tod1-broadcom"
+BROADCOM_REF_5_8_FILE="$BROADCOM_FILE"
+BROADCOM_REF_5_8_SHA256="$BROADCOM_SHA256"
 BROADCOM_REF_5_15_FILE="libfprint-2-tod1-broadcom_5.15.285-5.15.010.0-0ubuntu2~22.04.1~oem1_amd64.deb"
 BROADCOM_REF_5_15_SHA256="98fa8afab8b97457329a74960f6a6404f32a1782bcdcaed96030ffa15badb962"
 BROADCOM_REF_5_12_FILE="libfprint-2-tod1-broadcom_5.12.018-0ubuntu1~22.04.01_amd64.deb"
 BROADCOM_REF_5_12_SHA256="c2b0822ce0a0b7b916c77259445b7fa06ea200f1204b5c62d01d3203db8b7e6a"
 
-# FPRINT_FW_REF selects which reference release is fed to the plugin: 5.15
-# (default, newest published) or 5.12. The sensor firmware is only rewritten
-# when the reference version differs from the version already on the sensor.
-FPRINT_FW_REF="${FPRINT_FW_REF:-5.15}"
+# FPRINT_FW_REF selects which reference release is fed to the plugin: 5.8
+# (default, matches the bundled plugin), 5.12 or 5.15 (both built for the 22.04
+# libfprint 1.94 stack and therefore only useful once the stack moves to it).
+# The sensor firmware is only rewritten when the reference version differs from
+# the version already on the sensor.
+FPRINT_FW_REF="${FPRINT_FW_REF:-5.8}"
 
 fw_ref_file() {
     case "$FPRINT_FW_REF" in
+        5.8) printf '%s' "$BROADCOM_REF_5_8_FILE" ;;
         5.15) printf '%s' "$BROADCOM_REF_5_15_FILE" ;;
         5.12) printf '%s' "$BROADCOM_REF_5_12_FILE" ;;
-        *) die "unsupported FPRINT_FW_REF: $FPRINT_FW_REF (expected 5.15 or 5.12)" ;;
+        *) die "unsupported FPRINT_FW_REF: $FPRINT_FW_REF (expected 5.8, 5.12 or 5.15)" ;;
     esac
 }
 
 fw_ref_sha256() {
     case "$FPRINT_FW_REF" in
+        5.8) printf '%s' "$BROADCOM_REF_5_8_SHA256" ;;
         5.15) printf '%s' "$BROADCOM_REF_5_15_SHA256" ;;
         5.12) printf '%s' "$BROADCOM_REF_5_12_SHA256" ;;
-        *) die "unsupported FPRINT_FW_REF: $FPRINT_FW_REF (expected 5.15 or 5.12)" ;;
+        *) die "unsupported FPRINT_FW_REF: $FPRINT_FW_REF (expected 5.8, 5.12 or 5.15)" ;;
     esac
 }
 
@@ -202,6 +219,17 @@ download_verified() {
     log "SHA-256 verified: $(basename "$output")"
 }
 
+supported_usb_ids() {
+    printf '%s' "${SUPPORTED_USB_IDS[*]}"
+}
+
+detected_usb_ids() {
+    local id
+    for id in "${SUPPORTED_USB_IDS[@]}"; do
+        lsusb -d "$id" 2>/dev/null | grep -qi "$id" && printf '%s\n' "$id"
+    done
+}
+
 is_supported_device_present() {
-    lsusb -d "$SUPPORTED_USB_ID" 2>/dev/null | grep -qi "$SUPPORTED_USB_ID"
+    [[ -n $(detected_usb_ids) ]]
 }

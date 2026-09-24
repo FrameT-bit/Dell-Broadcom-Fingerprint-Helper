@@ -72,7 +72,7 @@ esac
 
 if ! $force; then
     is_supported_device_present || \
-        die "USB reader $SUPPORTED_USB_ID was not found; use --force only for known-compatible hardware"
+        die "no supported USB reader found (looked for: $(supported_usb_ids)); use --force only for known-compatible hardware"
 fi
 
 if ! $dry_run && [[ -z $stage_dir && $EUID -ne 0 ]]; then
@@ -126,6 +126,15 @@ fw_version=$(awk -F': ' '/^version:/{print $2; exit}' "$fw_ref_source/bcm_cv_cur
 [[ $fw_version == "$FPRINT_FW_REF".* ]] || die \
     "reference package $fw_ref_filename declares $fw_version, which is not the selected FPRINT_FW_REF=$FPRINT_FW_REF"
 log "Firmware references: $fw_version (from $fw_ref_filename)"
+
+# The reference pack and the plugin must belong to the same generation: the
+# pack is parsed with the section layout baked into the plugin, and the 5.12/5.15
+# packs use a different one (they carry one more section than the 5.8 pack).
+if [[ $FPRINT_FW_REF != "5.8" ]]; then
+    warn "FPRINT_FW_REF=$FPRINT_FW_REF ships a firmware pack built for the 22.04/libfprint 1.94 stack."
+    warn "The plugin installed here is the $BROADCOM_FILE build and cannot parse that pack"
+    warn "(symptom: 'Data read incorrect from file' -> 'Cannot read contents of sensor-firmware file')."
+fi
 
 if [[ -n $stage_dir ]]; then
     [[ ! -e $stage_dir ]] || die "staging destination already exists: $stage_dir"

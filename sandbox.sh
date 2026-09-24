@@ -33,7 +33,7 @@ for command_name in ar bwrap lsusb tar; do
     require_command "$command_name"
 done
 
-is_supported_device_present || die "USB fingerprint reader $SUPPORTED_USB_ID was not found"
+is_supported_device_present || die "no supported USB fingerprint reader found (looked for: $(supported_usb_ids))"
 [[ -d /dev/bus/usb ]] || die "/dev/bus/usb is not available"
 
 sandbox_dir=$(mktemp -d "$(tmp_base_dir)/${PROJECT_NAME}-sandbox.XXXXXX")

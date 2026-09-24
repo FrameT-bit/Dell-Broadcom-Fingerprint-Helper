@@ -19,7 +19,12 @@ printf 'Architecture: %s\n' "$(uname -m)"
 
 section "Compatible reader"
 if command -v lsusb >/dev/null 2>&1; then
-    lsusb -d "$SUPPORTED_USB_ID" 2>/dev/null || printf 'USB %s not found\n' "$SUPPORTED_USB_ID"
+    detected=$(detected_usb_ids)
+    if [[ -n $detected ]]; then
+        printf 'found: %s\n' "${detected//$'\n'/ }"
+    else
+        printf 'no supported reader found (looked for: %s)\n' "$(supported_usb_ids)"
+    fi
 else
     printf 'lsusb is not installed\n'
 fi
